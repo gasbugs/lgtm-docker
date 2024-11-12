@@ -4,9 +4,18 @@ import random
 from flask import Flask, request
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry._logs import set_logger_provider
+
+
+
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.requests import RequestsInstrumentor
 from opentelemetry.instrumentation.logging import LoggingInstrumentor
@@ -14,32 +23,80 @@ import logging
 import requests
 from functools import wraps
 
-# 로깅 설정: INFO 레벨로 로깅 설정
+
+import logging
+from flask import Flask, request
+from opentelemetry import trace, metrics
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+from opentelemetry._logs import set_logger_provider
+from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from opentelemetry.instrumentation.logging import LoggingInstrumentor
+
+# 공통 설정
+endpoint = "http://localhost:4317"  # OpenTelemetry Collector 엔드포인트
+resource = Resource.create({"service.name": "flask-demo-service"})
+
+
+# Flask 애플리케이션 생성 및 인스트루먼테이션
+app = Flask(__name__)
+FlaskInstrumentor().instrument_app(app)
+LoggingInstrumentor().instrument(set_logging_format=True)
+RequestsInstrumentor().instrument()
+
+######################################################
+# 트레이스 설정
+trace_exporter = OTLPSpanExporter(endpoint=endpoint)
+trace_provider = TracerProvider(resource=resource)
+trace_provider.add_span_processor(BatchSpanProcessor(trace_exporter))
+trace.set_tracer_provider(trace_provider)
+tracer = trace.get_tracer(__name__)
+
+
+############################################################
+# 로그 설정
+log_exporter = OTLPLogExporter(endpoint=endpoint)
+logger_provider = LoggerProvider(resource=resource)
+logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
+set_logger_provider(logger_provider)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+logger.addHandler(handler)
+logger.info("Logging Started")
 
-# OpenTelemetry 설정
-# 서비스 이름을 "complex-flask-demo"로 지정하여 리소스 생성
-resource = Resource.create({"service.name": "complex-flask-demo"})
-# 트레이서 프로바이더 설정
-trace.set_tracer_provider(TracerProvider(resource=resource))
-# OTLP 익스포터 설정 (로컬호스트의 4317 포트로 데이터 전송)
-otlp_exporter = OTLPSpanExporter(endpoint="http://localhost:4317")
-# 배치 스팬 프로세서 생성 및 트레이서 프로바이더에 추가
-span_processor = BatchSpanProcessor(otlp_exporter)
-trace.get_tracer_provider().add_span_processor(span_processor)
+##########################################
+# 메트릭 설정
+metric_reader = PeriodicExportingMetricReader(
+    OTLPMetricExporter(endpoint=endpoint)
+)
+metric_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+metrics.set_meter_provider(metric_provider)
+meter = metrics.get_meter(__name__)
 
-# Flask 애플리케이션 생성
-app = Flask(__name__)
-# Flask 애플리케이션 자동 인스트루멘테이션
-FlaskInstrumentor().instrument_app(app)
-# HTTP 요청 자동 인스트루멘테이션
-RequestsInstrumentor().instrument()
-# 로깅 자동 인스트루멘테이션
-LoggingInstrumentor().instrument()
+# HTTP 요청 횟수를 기록하는 카운터
+request_counter = meter.create_counter(
+    name="http_request_count",
+    description="Number of HTTP requests",
+    unit="1"
+)
 
-# 트레이서 생성
-tracer = trace.get_tracer(__name__)
+# 요청 처리 시간을 기록하는 히스토그램
+request_duration = meter.create_histogram(
+    name="http_request_duration",
+    description="Duration of HTTP requests",
+    unit="milliseconds"
+)
+
+
 
 # 비동기 작업을 위한 데코레이터
 def async_action(f):
@@ -70,6 +127,9 @@ def external_api_call(url):
 @app.route('/complex-operation')
 @async_action
 async def complex_operation():
+    request_counter.add(1, {"endpoint": "complex_operation"})
+    start_time = time.time()
+
     with tracer.start_as_current_span("complex_operation"):
         logger.info("Starting complex operation")
         
@@ -98,8 +158,14 @@ async def complex_operation():
             await asyncio.sleep(random.uniform(0.1, 0.2))
             logger.info("Final computation completed")
         
+        # 처리 시간 측정 (예시)
+        with tracer.start_as_current_span("request_duration"):
+            duration = (time.time() - start_time) * 1000  # 밀리초로 변환
+            request_duration.record(duration, {"endpoint": "complex_operation"})
+
         return {"message": "Complex operation completed", "external_data": external_data}
 
 # 메인 실행 부분
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, host="0.0.0.0")
+    logger.info("Application started")
+    app.run(debug=False, port=5000, host="0.0.0.0")

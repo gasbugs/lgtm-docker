@@ -96,7 +96,52 @@ request_duration = meter.create_histogram(
     unit="milliseconds"
 )
 
+@app.get("/health")
+def health():
+    request_counter.add(1, {"endpoint": "/health"})
+    return {"message":"I'm healthy"}
 
+@app.get("/")
+def read_root():
+    request_counter.add(1, {"endpoint": "/"})
+    logging.info("Hello World")
+    return {"Hello": "World"}
+
+@app.get("/io_task")
+def io_task():
+    request_counter.add(1, {"endpoint": "/io_task"})
+    time.sleep(1)
+    logging.error("io task")
+    return "IO bound task finish!"
+
+@app.get("/cpu_task")
+def cpu_task():
+    request_counter.add(1, {"endpoint": "/cpu_task"})
+    for i in range(1000):
+        n = i*i*i
+    #logging.error("cpu task")
+    logging.info("cpu task")
+    return "CPU bound task finish!"
+
+@app.get("/random_status")
+def random_status():
+    request_counter.add(1, {"endpoint": "/random_status"})
+    logging.error("random status")
+    return {"path": "/random_status"}
+
+@app.get("/random_sleep")
+def random_sleep():
+    request_counter.add(1, {"endpoint": "/random_sleep"})
+    time.sleep(random.randint(0, 5))
+    #logging.error("random sleep")
+    logging.info("random sleep")
+    return {"path": "/random_sleep"}
+
+@app.get("/error_test")
+def error_test():
+    request_counter.add(1, {"endpoint": "/error_test"})
+    logging.error("got error!!!!")
+    raise ValueError("value error")
 
 # 비동기 작업을 위한 데코레이터
 def async_action(f):
@@ -127,7 +172,7 @@ def external_api_call(url):
 @app.route('/complex-operation')
 @async_action
 async def complex_operation():
-    request_counter.add(1, {"endpoint": "complex_operation"})
+    request_counter.add(1, {"endpoint": "/complex_operation"})
     start_time = time.time()
 
     with tracer.start_as_current_span("complex_operation"):

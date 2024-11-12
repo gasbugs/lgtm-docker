@@ -24,6 +24,9 @@ exporters:
   prometheusremotewrite:
     endpoint: http://mimir:9090/api/v1/push
 
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+
 extensions:
   health_check:
   pprof:
@@ -40,3 +43,7 @@ service:
       receivers: [otlp, prometheus]
       processors: [batch]
       exporters: [prometheusremotewrite]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/loki]  # 또는 다른 로그 백엔드 익 스포터

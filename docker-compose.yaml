@@ -16,6 +16,8 @@ services:
     command: -config.file=/etc/loki/local-config.yaml
     environment:
       - JAEGER_AGENT_HOST=otelcol
+    volumes:
+      - ./services/loki/local-config.yaml:/etc/loki/local-config.yaml
 
   grafana:
     image: grafana/grafana:11.0.1
